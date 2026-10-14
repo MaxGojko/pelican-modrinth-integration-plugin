@@ -1,6 +1,7 @@
 {
   "*": {
     "version": "1.0.0",
-    "download_url": "https://github.com/MaxGojko/pelican-modrinth-integration-plugin/releases/download/v1.0.0/modrinth-integration.zip"
+    "download_url": "https://github.com/MaxGojko/pelican-modrinth-integration-plugin/releases/download/v1.0.0/modrinth-integration.zip",
+    "sha256": "77ec23448df414893a05923ad2ddf647e1742be82918a7d91d1ab245246a8b70"
   }
 }
