@@ -14,9 +14,16 @@ H1ghSyst3m and, like it, licensed under the **GPL-3.0** (see [`LICENSE`](LICENSE
 
 ## Installation
 
-1. Download this repository as a zip (Code → Download ZIP) or take a release zip.
-2. In the panel go to **Admin → Plugins → Import** and upload the zip.
-3. Set the egg tags described below.
+Requires Pelican Panel 1.0.0-rc.1 or newer.
+
+1. In the panel go to **Admin → Plugins → Import from URL** and paste the latest release zip:
+   `https://github.com/MaxGojko/pelican-modrinth-integration-plugin/releases/latest/download/modrinth-integration.zip`
+   (or download it from [Releases](https://github.com/MaxGojko/pelican-modrinth-integration-plugin/releases) and use
+   **Import from File**), then install it.
+2. Set the egg tags described below.
+
+New versions show up on the Plugins page by themselves; update there or with
+`php artisan p:plugin:update modrinth-integration`. What changed in each version is in [`CHANGELOG.md`](CHANGELOG.md).
 
 The plugin id is `modrinth-integration`. Pelican runs `yarn` when installing any plugin; this plugin has no frontend
 assets, so a missing `yarn` only leaves a warning in the log (unless `PANEL_PLUGIN_DEV_MODE` is on, which turns it
@@ -202,4 +209,15 @@ Filament, Laravel and a fake Modrinth, without installing anything:
 php tests/run.php .
 ```
 
-It needs PHP 8.2 or newer.
+It needs PHP 8.2 or newer. `.github/scripts/check.sh` additionally lints every PHP file and checks `plugin.json`;
+CI runs it on every push and pull request.
+
+### Releasing
+
+1. Add the new version to [`CHANGELOG.md`](CHANGELOG.md) and push to `main`.
+2. Publish a GitHub release with a new tag `vX.Y.Z` on `main`.
+
+The release workflow runs the checks on the tag, builds `modrinth-integration.zip` from the tag (without `tests/` and
+`.github/`), attaches it and its SHA-256 to the release, and updates `plugin.json` and `update.json` on `main` so
+panels are offered the update. Pre-releases (`vX.Y.Z-beta.1` or marked as pre-release) get a zip but are never offered
+as updates.

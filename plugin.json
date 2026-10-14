@@ -2,17 +2,17 @@
     "id": "modrinth-integration",
     "name": "Modrinth Integration",
     "author": "MaxGojko",
-    "version": "1.0",
+    "version": "1.0.0",
     "description": "Install, update and manage Minecraft mods, plugins and datapacks from Modrinth, with dependencies, update all and import/export between servers",
     "category": "plugin",
-    "url": null,
-    "update_url": null,
+    "url": "https://github.com/MaxGojko/pelican-modrinth-integration-plugin",
+    "update_url": "https://raw.githubusercontent.com/MaxGojko/pelican-modrinth-integration-plugin/main/update.json",
     "namespace": "MaxGojko\\ModrinthIntegration",
     "class": "ModrinthIntegrationPlugin",
     "panels": [
         "server"
     ],
-    "panel_version": null,
+    "panel_version": "^1.0.0-rc.1",
     "api_version": 1,
     "composer_packages": null
 }

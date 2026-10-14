@@ -1,0 +1,190 @@
+name: modrinth-integration
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to package (for example v1.4.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  # Validates the tag name once. Every later job only sees the validated value.
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Resolve release version
+        id: release
+        env:
+          RAW_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          TAG="$RAW_TAG"
+          SEMVER='^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          if [[ ! "$TAG" =~ $SEMVER ]]; then
+            echo "::error::Release tag is not a valid version (expected v<major>.<minor>.<patch>)"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: $TAG"
+          echo "Resolved version: $VERSION"
+
+  # Lint and test the tagged tree. Packaging does not start unless this passes.
+  test:
+    needs: resolve
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: refs/tags/${{ needs.resolve.outputs.tag }}
+
+  package:
+    needs: [resolve, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha256: ${{ steps.build.outputs.sha256 }}
+    steps:
+      # Scripts come from the workflow's own ref, the plugin files are read from the tag.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Build zip from the release tag
+        id: build
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          .github/scripts/build-package.sh
+          SHA256="$(cut -d' ' -f1 modrinth-integration.zip.sha256)"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          {
+            echo "### modrinth-integration $VERSION"
+            echo
+            echo "Tag: \`$TAG\`"
+            echo
+            echo "sha256: \`$SHA256\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: modrinth-integration
+          path: |
+            modrinth-integration.zip
+            modrinth-integration.zip.sha256
+
+      - name: Upload zip and checksum to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release upload "$TAG" modrinth-integration.zip modrinth-integration.zip.sha256 --repo "$REPO" --clobber
+
+  # Runs last: the panel reads update.json from the default branch, so it must only
+  # advertise a version whose zip is already attached to the release.
+  # Pre-releases still get a zip on their release, but never become the update offered to panels.
+  metadata:
+    needs: [resolve, package]
+    if: ${{ !github.event.release.prerelease && !contains(needs.resolve.outputs.version, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Switch to the default branch
+        run: |
+          git fetch origin "$DEFAULT_BRANCH"
+          git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+
+      - name: Verify the released zip matches the built checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          REPO: ${{ github.repository }}
+          SHA256: ${{ needs.package.outputs.sha256 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/released"
+          gh release download "$TAG" --repo "$REPO" --pattern modrinth-integration.zip --dir "$RUNNER_TEMP/released" --clobber
+          ACTUAL="$(sha256sum "$RUNNER_TEMP/released/modrinth-integration.zip" | cut -d' ' -f1)"
+          echo "built:    $SHA256"
+          echo "released: $ACTUAL"
+          test "$ACTUAL" = "$SHA256"
+
+      - name: Update plugin.json and update.json
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+          SHA256: ${{ needs.package.outputs.sha256 }}
+        run: |
+          DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/modrinth-integration.zip"
+
+          jq --arg version "$VERSION" '.version = $version' plugin.json > plugin.json.tmp
+          mv plugin.json.tmp plugin.json
+
+          # Keys read by the panel (Plugin::getUpdateEntry): version, download_url, sha256.
+          jq -n --arg version "$VERSION" --arg url "$DOWNLOAD_URL" --arg sha256 "$SHA256" \
+            '{"*": {version: $version, download_url: $url, sha256: $sha256}}' > update.json
+          cat update.json
+
+      - name: Commit and push metadata to default branch
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add plugin.json update.json
+
+          if git diff --staged --quiet; then
+            echo "No metadata changes to commit"
+          else
+            git commit -m "Update release metadata to version $VERSION"
+            git pull --rebase origin "$DEFAULT_BRANCH"
+            git push origin "HEAD:$DEFAULT_BRANCH"
+          fi
+
+      - name: Verify default branch metadata
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          SHA256: ${{ needs.package.outputs.sha256 }}
+        run: |
+          git fetch origin "$DEFAULT_BRANCH"
+
+          MAIN_PLUGIN_VERSION="$(git show "origin/$DEFAULT_BRANCH:plugin.json" | jq -r '.version')"
+          MAIN_UPDATE_VERSION="$(git show "origin/$DEFAULT_BRANCH:update.json" | jq -r '.["*"].version')"
+          MAIN_UPDATE_SHA256="$(git show "origin/$DEFAULT_BRANCH:update.json" | jq -r '.["*"].sha256')"
+
+          echo "main plugin.json version: $MAIN_PLUGIN_VERSION"
+          echo "main update.json version: $MAIN_UPDATE_VERSION"
+          echo "main update.json sha256:  $MAIN_UPDATE_SHA256"
+
+          test "$MAIN_PLUGIN_VERSION" = "$VERSION"
+          test "$MAIN_UPDATE_VERSION" = "$VERSION"
+          test "$MAIN_UPDATE_SHA256" = "$SHA256"

@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Called by package.yml so a release is only packaged after the checks pass on the tag.
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to check out (empty means the ref that triggered the workflow)
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Only ever set by package.yml, from a tag that passed semver validation.
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - name: Lint PHP files and run tests
+        run: .github/scripts/check.sh
